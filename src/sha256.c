@@ -9,7 +9,11 @@
 #endif
 
 typedef struct {
+#ifdef TURING_USE_SIMD
+  __attribute__((aligned(16))) uint8_t data[64];
+#else
   uint8_t data[64];
+#endif
   size_t datalen;
   size_t bitlen;
   uint32_t state[8];
