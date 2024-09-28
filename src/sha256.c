@@ -1,4 +1,6 @@
+#ifndef TURING_IMPLEMENTATION
 #include <turing/sha256.h>
+#endif  // TURING_IMPLEMENTATION
 
 #include <stdio.h>
 #include <stdint.h>
@@ -11,12 +13,13 @@
 typedef struct {
 #ifdef TURING_USE_SIMD
   __attribute__((aligned(16))) uint8_t data[64];
+  __attribute__((aligned(16))) uint32_t state[8];
 #else
   uint8_t data[64];
+  uint32_t state[8];
 #endif
   size_t datalen;
   size_t bitlen;
-  uint32_t state[8];
 } ctx_t;
 
 static const uint32_t k[] = {
@@ -52,26 +55,8 @@ static void init(ctx_t *ctx) {
   ctx->state[7] = 0x5be0cd19;
 }
 
-#ifdef TURING_USE_SIMD
-static void transform(ctx_t *ctx, const uint8_t *data) {
-  __m128i state[4], msg, tmp1, tmp2, sched[4];
-  state[0] = _mm_loadu_si128((__m128i *) &ctx->state[0]);
-  state[1] = _mm_loadu_si128((__m128i *) &ctx->state[4]);
-  msg = _mm_loadu_si128((__m128i *) data);
-  for (size_t i = 0; i < 64; i += 16) {
-    tmp1 = _mm_sha256msg1_epu32(msg, sched[i]);
-    tmp2 = _mm_sha256msg2_epu32(msg, sched[i + 1]);
-    state[0] = _mm_sha256rnds2_epu32(state[0], state[1], sched[i]);
-    state[1] = _mm_sha256rnds2_epu32(state[1], state[0], sched[i + 1]);
-    msg = _mm_loadu_si128((__m128i *) (data + i + 16));
-  }
-  state[0] = _mm_add_epi32(state[0], _mm_loadu_si128((__m128i *) &ctx->state[0]));
-  state[1] = _mm_add_epi32(state[1], _mm_loadu_si128((__m128i *) &ctx->state[4]));
-  _mm_storeu_si128((__m128i *) &ctx->state[0], state[0]);
-  _mm_storeu_si128((__m128i *) &ctx->state[4], state[1]);
-}
-#else
-static void transform(ctx_t *ctx, const uint8_t *data) {
+#ifndef TURING_USE_SIMD
+static void transform_sw(ctx_t *ctx, const uint8_t *data) {
   uint32_t a, b, c, d, e, f, g, h, i, j, t1, t2, m[64];
   for (i = 0, j = 0; i < 16; ++i, j += 4) {
     m[i] = (data[j + 0] << 24) | (data[j + 1] << 16) | (data[j + 2] << 8) | (data[j + 3] << 0);
@@ -109,6 +94,36 @@ static void transform(ctx_t *ctx, const uint8_t *data) {
   ctx->state[7] += h;
 }
 #endif
+
+#ifdef TURING_USE_SIMD
+static void transform_hw(ctx_t *ctx, const uint8_t *data) {
+  __m128i state[4], msg, tmp1, tmp2, sched[16];
+  state[0] = _mm_loadu_si128((__m128i *) &ctx->state[0]);
+  state[1] = _mm_loadu_si128((__m128i *) &ctx->state[4]);
+  msg = _mm_loadu_si128((__m128i *) data);
+  for (size_t i = 0; i < 64; i += 16) {
+    tmp1 = _mm_sha256msg1_epu32(msg, sched[i]);
+    tmp2 = _mm_sha256msg2_epu32(msg, sched[i + 1]);
+    sched[i] = _mm_add_epi32(sched[i], tmp1);
+    sched[i + 1] = _mm_add_epi32(sched[i + 1], tmp2);
+    state[0] = _mm_sha256rnds2_epu32(state[0], state[1], sched[i]);
+    state[1] = _mm_sha256rnds2_epu32(state[1], state[0], sched[i + 1]);
+    msg = _mm_loadu_si128((__m128i *) (data + i + 16));
+  }
+  state[0] = _mm_add_epi32(state[0], _mm_loadu_si128((__m128i *) &ctx->state[0]));
+  state[1] = _mm_add_epi32(state[1], _mm_loadu_si128((__m128i *) &ctx->state[4]));
+  _mm_storeu_si128((__m128i *) &ctx->state[0], state[0]);
+  _mm_storeu_si128((__m128i *) &ctx->state[4], state[1]);
+}
+#endif
+
+static inline void transform(ctx_t *ctx, const uint8_t *data) {
+#ifdef TURING_USE_SIMD
+  transform_hw(ctx, data);
+#else
+  transform_sw(ctx, data);
+#endif
+}
 
 static void update(ctx_t *ctx, const uint8_t *data, size_t len) {
   for (uint32_t i = 0; i < len; ++i) {
