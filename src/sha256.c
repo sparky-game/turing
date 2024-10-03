@@ -1,6 +1,4 @@
-#ifndef TURING_IMPLEMENTATION
 #include <turing/sha256.h>
-#endif  // TURING_IMPLEMENTATION
 
 #include <stdio.h>
 #include <stdint.h>
